@@ -10,6 +10,14 @@ permissions:
 env:
   CARGO_NET_GIT_FETCH_WITH_CLI: "true"
   MIRRORD_TELEMETRY: false
+  # Logging: mirrord layer/intproxy traces + full Rust backtraces on panic.
+  RUST_LOG: "mirrord=debug,warn"
+  RUST_BACKTRACE: "1"
+  # Make the AddressSanitizer report loud and well-symbolized so the UAF in the
+  # getifaddrs hook's list copy is easy to read. MallocNanoZone=0 avoids the
+  # macOS malloc-zone conflict ASan warns about.
+  ASAN_OPTIONS: "abort_on_error=1:symbolize=1:print_stats=1:detect_leaks=0"
+  MallocNanoZone: "0"
 
 jobs:
   getifaddrs:
@@ -48,6 +56,15 @@ jobs:
       - name: Build C test apps
         run: ./scripts/build_c_apps.sh
 
+      # Rebuild just the getifaddrs app with debug symbols and frame pointers so
+      # the ASan report points at exact source lines. -O1/-fno-omit-frame-pointer
+      # keep the stack readable; no -static-libasan (macOS ASan is dynamic).
+      - name: Rebuild getifaddrs app with ASan + debug symbols
+        run: |
+          clang -g -O1 -fno-omit-frame-pointer -fsanitize=address \
+            mirrord/layer-tests/tests/apps/getifaddrs/getifaddrs.c \
+            -o mirrord/layer-tests/tests/apps/getifaddrs/out.c_test_app
+
       # Builds the CLI binary and the universal layer .dylib in one shot.
       # --no-monitor/--no-wizard skip the frontend builds (no pnpm needed); the
       # CLI's build.rs stubs an empty monitor dist so rust-embed still compiles.
@@ -56,3 +73,11 @@ jobs:
 
       - name: Run getifaddrs test (--nocapture)
         run: cargo test -p mirrord-layer-tests --no-default-features getifaddrs -- --nocapture
+
+      - name: Save intproxy logs
+        if: ${{ always() }}
+        continue-on-error: true
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: intproxy_logs_macos
+          path: /tmp/intproxy_logs/macos
