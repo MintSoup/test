@@ -50,6 +50,23 @@ unsafe fn branch_target(at: *const u8, word: u32) -> Option<*const u8> {
     Some(at.offset(off as isize))
 }
 
+/// Resolve the address computed by an `adrp Xd, <page>` + `add Xd, Xd, #imm`
+/// pair -- i.e. the GOT slot an `__auth_stubs` entry loads its target from.
+unsafe fn adrp_add_target(pc: *const u8, adrp: u32, add: u32) -> *const u8 {
+    let immlo = ((adrp >> 29) & 0x3) as u64;
+    let immhi = ((adrp >> 5) & 0x7_FFFF) as u64;
+    let mut imm = (immhi << 2) | immlo; // 21 bits
+    if imm & (1 << 20) != 0 {
+        imm |= !0u64 << 21; // sign-extend
+    }
+    let page = ((pc as u64) & !0xFFF).wrapping_add(imm << 12);
+    let mut off = ((add >> 10) & 0xFFF) as u64;
+    if (add >> 22) & 1 == 1 {
+        off <<= 12;
+    }
+    page.wrapping_add(off) as *const u8
+}
+
 unsafe fn symbolicate(addr: *const c_void) -> String {
     let mut info: libc::Dl_info = std::mem::zeroed();
     if libc::dladdr(addr, &mut info) != 0 && !info.dli_sname.is_null() {
@@ -95,11 +112,22 @@ fn main() {
 
         dump("BEFORE replace (stub)", base);
 
-        // The stub is a `b`; follow it to the real implementation and watch that too.
+        // The stub is a `b`; follow it to the __auth_stubs entry, then to the GOT
+        // slot that entry loads its target from.
         let target = branch_target(base, *(base as *const u32));
+        let mut got: Option<*const u8> = None;
         if let Some(t) = target {
             eprintln!("stub branches to {t:?} ({})", symbolicate(t as *const c_void));
             dump("BEFORE replace (impl)", t);
+            let w = std::slice::from_raw_parts(t as *const u32, 2);
+            let slot = adrp_add_target(t, w[0], w[1]);
+            got = Some(slot);
+            let raw = *(slot as *const usize);
+            let stripped = (raw & 0x0000_FFFF_FFFF_FFFF) as *const c_void; // strip arm64e PAC
+            eprintln!(
+                "impl loads target from GOT slot {slot:?}: raw={raw:#018x} -> {} ",
+                symbolicate(stripped)
+            );
         }
 
         interceptor.begin_transaction();
@@ -113,7 +141,15 @@ fn main() {
         if let Some(t) = target {
             dump("AFTER  replace (impl)", t);
         }
-        eprintln!("^ compare stub vs impl before/after to see where frida actually patched.");
+        if let Some(slot) = got {
+            let raw = *(slot as *const usize);
+            let stripped = (raw & 0x0000_FFFF_FFFF_FFFF) as *const c_void;
+            eprintln!(
+                "GOT slot {slot:?} AFTER: raw={raw:#018x} -> {}",
+                symbolicate(stripped)
+            );
+        }
+        eprintln!("^ if the GOT slot's value/symbol changed, frida rebound the data pointer.");
 
         eprintln!("--- exercising libc: one getifaddrs + one freeifaddrs ---");
         let mut head: *mut libc::ifaddrs = ptr::null_mut();
