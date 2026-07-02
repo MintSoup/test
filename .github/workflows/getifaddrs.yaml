@@ -11,7 +11,7 @@ env:
   CARGO_NET_GIT_FETCH_WITH_CLI: "true"
   MIRRORD_TELEMETRY: false
   # Logging: mirrord layer/intproxy traces + full Rust backtraces on panic.
-  RUST_LOG: "mirrord=debug,warn"
+  RUST_LOG: "warn,mirrord=trace"
   RUST_BACKTRACE: "1"
   # Make the AddressSanitizer report loud and well-symbolized so the UAF in the
   # getifaddrs hook's list copy is easy to read. MallocNanoZone=0 avoids the
