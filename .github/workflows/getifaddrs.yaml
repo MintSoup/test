@@ -49,8 +49,10 @@ jobs:
         run: ./scripts/build_c_apps.sh
 
       # Builds the CLI binary and the universal layer .dylib in one shot.
+      # --no-monitor/--no-wizard skip the frontend builds (no pnpm needed); the
+      # CLI's build.rs stubs an empty monitor dist so rust-embed still compiles.
       - name: Build CLI and universal layer
-        run: cargo xtask build-cli --platform macos-universal --no-wizard
+        run: cargo xtask build-cli --platform macos-universal --no-wizard --no-monitor
 
       - name: Run getifaddrs test (--nocapture)
         run: cargo test -p mirrord-layer-tests --no-default-features getifaddrs -- --nocapture
