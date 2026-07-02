@@ -56,12 +56,27 @@ jobs:
       - name: Build C test apps
         run: ./scripts/build_c_apps.sh
 
-      # Rebuild just the getifaddrs app with debug symbols and frame pointers so
-      # the ASan report points at exact source lines. -O1/-fno-omit-frame-pointer
-      # keep the stack readable; no -static-libasan (macOS ASan is dynamic).
-      - name: Rebuild getifaddrs app with ASan + debug symbols
+      # MECHANISM CHECK: sanitizers ship a `getifaddrs` interceptor (to unpoison the
+      # list they return) but no `freeifaddrs` one. On macOS that interceptor is wired
+      # in via dyld interposing, so the app's `getifaddrs` call is redirected to ASan
+      # and never reaches the libsystem entry frida patched -- while `freeifaddrs` has
+      # no interceptor and hits frida's hook normally. Expect to see wrap/interceptor
+      # symbols for getifaddrs and nothing for freeifaddrs.
+      - name: Inspect ASan interceptor symbols (getifaddrs vs freeifaddrs)
         run: |
-          clang -g -O1 -fno-omit-frame-pointer -fsanitize=address \
+          asan="$(clang -print-resource-dir)/lib/darwin/libclang_rt.asan_osx_dynamic.dylib"
+          echo "asan dylib: $asan"
+          ls -l "$asan" 2>/dev/null || find / -name 'libclang_rt.asan_osx_dynamic.dylib' 2>/dev/null
+          echo "=== symbols matching 'ifaddr' ==="
+          nm "$asan" 2>/dev/null | grep -i ifaddr || echo "(no ifaddr symbols)"
+
+      # BEHAVIOR CHECK: rebuild the app WITHOUT AddressSanitizer. If ASan's interposed
+      # interceptor is what shadows frida's getifaddrs hook, then without ASan the
+      # `getifaddrs_detour` should finally run ("hook: calling original" prints), IPv6
+      # gets hidden, and the test passes. -g keeps stacks readable.
+      - name: Rebuild getifaddrs app WITHOUT ASan (hook interception experiment)
+        run: |
+          clang -g -O1 -fno-omit-frame-pointer \
             mirrord/layer-tests/tests/apps/getifaddrs/getifaddrs.c \
             -o mirrord/layer-tests/tests/apps/getifaddrs/out.c_test_app
 
