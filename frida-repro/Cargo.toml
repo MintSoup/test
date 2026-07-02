@@ -1,0 +1,15 @@
+[package]
+name = "frida-freeifaddrs-repro"
+version = "0.1.0"
+edition = "2021"
+
+# Minimal, self-contained reproduction: hook `freeifaddrs` with the same
+# frida-gum version mirrord uses (0.17.1) and observe whether replacing its
+# 4-byte single-branch stub clobbers the neighboring stubs.
+[dependencies]
+frida-gum = { version = "0.17.1", features = ["auto-download", "std"] }
+libc = "0.2"
+
+[[bin]]
+name = "repro"
+path = "src/main.rs"
