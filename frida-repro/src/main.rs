@@ -13,7 +13,6 @@
 //! detour actually fired.
 
 use std::{
-    backtrace::Backtrace,
     ffi::{CStr, c_void},
     ptr,
     sync::{
@@ -31,14 +30,24 @@ static CALLS: AtomicUsize = AtomicUsize::new(0);
 
 unsafe extern "C" fn freeifaddrs_detour(ifaddrs: *mut c_void) {
     let n = CALLS.fetch_add(1, Ordering::Relaxed);
-    if n < 8 {
+    if n < 12 {
         eprintln!(
-            "== freeifaddrs_detour call #{n}, arg = {ifaddrs:?} ==\n{}",
-            Backtrace::force_capture()
+            "== freeifaddrs_detour call #{n}, arg = {ifaddrs:?} ({}) ==",
+            symbolicate(ifaddrs)
         );
     }
     // Intentionally do NOT call the original: swallowing is fine for a repro and
     // avoids crashing if a hijacked neighbor passes us a non-ifaddrs pointer.
+}
+
+/// If `word` is an arm64 unconditional `b`, return the address it branches to.
+unsafe fn branch_target(at: *const u8, word: u32) -> Option<*const u8> {
+    if word & 0xFC00_0000 != 0x1400_0000 {
+        return None;
+    }
+    let imm26 = (word & 0x03FF_FFFF) as i32;
+    let off = ((imm26 << 6) >> 6) * 4; // sign-extend 26 bits, then *4
+    Some(at.offset(off as isize))
 }
 
 unsafe fn symbolicate(addr: *const c_void) -> String {
@@ -84,7 +93,14 @@ fn main() {
             eprintln!("  +{off:<2} -> {}", symbolicate(base.add(off) as *const c_void));
         }
 
-        dump("BEFORE replace", base);
+        dump("BEFORE replace (stub)", base);
+
+        // The stub is a `b`; follow it to the real implementation and watch that too.
+        let target = branch_target(base, *(base as *const u32));
+        if let Some(t) = target {
+            eprintln!("stub branches to {t:?} ({})", symbolicate(t as *const c_void));
+            dump("BEFORE replace (impl)", t);
+        }
 
         interceptor.begin_transaction();
         match interceptor.replace(export, NativePointer(detour), NativePointer(ptr::null_mut())) {
@@ -93,8 +109,11 @@ fn main() {
         }
         interceptor.end_transaction();
 
-        dump("AFTER  replace", base);
-        eprintln!("^ if bytes past the first word changed, frida overwrote the neighbor stub(s).");
+        dump("AFTER  replace (stub)", base);
+        if let Some(t) = target {
+            dump("AFTER  replace (impl)", t);
+        }
+        eprintln!("^ compare stub vs impl before/after to see where frida actually patched.");
 
         eprintln!("--- exercising libc: one getifaddrs + one freeifaddrs ---");
         let mut head: *mut libc::ifaddrs = ptr::null_mut();
