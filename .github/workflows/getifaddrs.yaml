@@ -10,6 +10,12 @@ permissions:
 env:
   CARGO_NET_GIT_FETCH_WITH_CLI: "true"
   MIRRORD_TELEMETRY: false
+  # Cache every compilation unit (workspace crates included) in the GitHub Actions
+  # cache via sccache, so only the crates you actually edit recompile.
+  RUSTC_WRAPPER: sccache
+  SCCACHE_GHA_ENABLED: "true"
+  # sccache can't cache incremental builds; without this it silently skips them.
+  CARGO_INCREMENTAL: "0"
   # Logging: mirrord layer/intproxy traces + full Rust backtraces on panic.
   RUST_LOG: "warn,mirrord=trace"
   RUST_BACKTRACE: "1"
@@ -33,6 +39,11 @@ jobs:
         with:
           repository: mintsoup/mirrord
           ref: fix-getifaddrs
+
+      # Must run before the toolchain step: RUSTC_WRAPPER=sccache is global, so
+      # sccache has to be on PATH before anything invokes rustc.
+      - name: Setup sccache
+        uses: mozilla/sccache-action@7d986dd989559c6ecdb630a3fd2557667be217ad # v0.0.9
 
       # The macOS build targets both arches explicitly, so drop the pinned single-target file.
       - name: Drop pinned toolchain file
@@ -91,6 +102,10 @@ jobs:
       # ("Directory not empty", os error 66).
       - name: Run getifaddrs test (--nocapture)
         run: cargo test -p mirrord-layer-tests --no-default-features getifaddrs -- --nocapture --test-threads=1
+
+      - name: sccache stats
+        if: ${{ always() }}
+        run: sccache --show-stats
 
       - name: Save intproxy logs
         if: ${{ always() }}
