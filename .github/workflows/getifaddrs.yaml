@@ -86,8 +86,11 @@ jobs:
       - name: Build CLI and universal layer
         run: cargo xtask build-cli --platform macos-universal --no-wizard --no-monitor
 
+      # --test-threads=1 serializes the two rstest cases; running them in parallel
+      # makes both `mirrord exec` processes SIP-strip into the same temp path at once
+      # ("Directory not empty", os error 66).
       - name: Run getifaddrs test (--nocapture)
-        run: cargo test -p mirrord-layer-tests --no-default-features getifaddrs -- --nocapture
+        run: cargo test -p mirrord-layer-tests --no-default-features getifaddrs -- --nocapture --test-threads=1
 
       - name: Save intproxy logs
         if: ${{ always() }}
